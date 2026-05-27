@@ -1,0 +1,165 @@
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+}
+
+.app-header {
+  margin-bottom: 2rem;
+}
+
+.app-header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.app-header p {
+  margin: 0;
+  color: #5e6c84;
+  font-size: 0.9rem;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.nav button {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  background: #fff;
+  color: #172b4d;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.nav button:hover {
+  background: #ebecf0;
+}
+
+.nav button.active {
+  background: #0052cc;
+  border-color: #0052cc;
+  color: #fff;
+}
+
+.card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.25rem;
+  box-shadow: 0 1px 2px rgba(9, 30, 66, 0.15);
+}
+
+.card h2 {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #5e6c84;
+}
+
+.field input {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.field input:focus {
+  outline: 2px solid #4c9aff;
+  border-color: transparent;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.btn-primary {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  background: #0052cc;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: #0747a6;
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.status.ok {
+  color: #00875a;
+}
+
+.status.err {
+  color: #de350b;
+}
+
+.sync-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sync-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #ebecf0;
+  font-size: 0.875rem;
+}
+
+.sync-list li:last-child {
+  border-bottom: none;
+}
+
+.badge {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.badge.trello {
+  background: #0079bf;
+  color: #fff;
+}
+
+.badge.jira {
+  background: #0052cc;
+  color: #fff;
+}
+
+.empty {
+  color: #5e6c84;
+  font-size: 0.9rem;
+}

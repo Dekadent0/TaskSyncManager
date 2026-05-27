@@ -1,0 +1,17 @@
+node_modules/
+dist/
+# OS generated files
+.DS_Store
+.DS_Store?
+_MACPATH
+Thumbs.db
+db.js.swp
+
+# IDE/Code editor settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
