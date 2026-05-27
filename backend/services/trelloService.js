@@ -8,7 +8,7 @@ export const JIRA_ISSUE_MARKER = (issueKey) => `jira-issue:${issueKey}`;
 
 function trelloQuery(credentials, extra = {}) {
   return {
-    key: credentials.trello_key,
+    key: credentials.trello_api_key,
     token: credentials.trello_token,
     ...extra,
   };

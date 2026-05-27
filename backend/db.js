@@ -5,11 +5,29 @@
 import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { promisify } from 'node:util';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DB_PATH = path.join(__dirname, 'database.sqlite');
 
 export const db = new sqlite3.Database(DB_PATH);
+
+const dbGetAsync = promisify(db.get.bind(db));
+const dbAllAsync = promisify(db.all.bind(db));
+
+function tryRenameColumn(table, from, to) {
+  db.run(`ALTER TABLE ${table} RENAME COLUMN ${from} TO ${to}`, (err) => {
+    if (!err) return;
+    const msg = String(err.message);
+    if (
+      msg.includes('no such column') ||
+      msg.includes('duplicate column name')
+    ) {
+      return;
+    }
+    console.error(`Rename ${table}.${from} -> ${to}:`, msg);
+  });
+}
 
 db.serialize(() => {
   db.run(`
@@ -28,11 +46,11 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS environments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      trello_key TEXT,
+      trello_api_key TEXT,
       trello_token TEXT,
       jira_domain TEXT,
       jira_email TEXT,
-      jira_token TEXT,
+      jira_api_token TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     )
@@ -53,34 +71,22 @@ db.serialize(() => {
     )
   `);
 
-  const syncRuleMigrations = [
-    'ALTER TABLE sync_rules ADD COLUMN environment_id INTEGER',
-    'ALTER TABLE sync_rules ADD COLUMN jira_board_id TEXT',
-    'ALTER TABLE sync_rules ADD COLUMN name TEXT',
-    "ALTER TABLE sync_rules ADD COLUMN direction TEXT DEFAULT 'trello-to-jira'",
-  ];
-
-  for (const sql of syncRuleMigrations) {
-    db.run(sql, (err) => {
-      if (err && !String(err.message).includes('duplicate column name')) {
-        console.error(`Migration failed (${sql}):`, err.message);
-      }
-    });
-  }
+  // Upgrade existing databases created before column names were unified.
+  tryRenameColumn('environments', 'trello_key', 'trello_api_key');
+  tryRenameColumn('environments', 'jira_token', 'jira_api_token');
 });
 
+/** Run a SELECT that returns one row (or undefined). */
 export function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-  });
+  return dbGetAsync(sql, params);
 }
 
+/** Run a SELECT that returns many rows (empty array if none). */
 export function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows ?? [])));
-  });
+  return dbAllAsync(sql, params).then((rows) => rows ?? []);
 }
 
+/** Run INSERT / UPDATE / DELETE; resolves with { lastID, changes }. */
 export function dbRun(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function onRun(err) {

@@ -5,11 +5,11 @@ import { styles } from '../../styles/theme.js';
 export default function SettingsModal({ environmentId, environmentName, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: environmentName,
-    trello_key: '',
+    trello_api_key: '',
     trello_token: '',
     jira_domain: '',
     jira_email: '',
-    jira_token: '',
+    jira_api_token: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -21,11 +21,11 @@ export default function SettingsModal({ environmentId, environmentName, onClose,
         const row = await apiRequest(`${API}/environments/${environmentId}`);
         setForm({
           name: row.name ?? environmentName,
-          trello_key: row.trello_key ?? '',
+          trello_api_key: row.trello_api_key ?? '',
           trello_token: '',
           jira_domain: row.jira_domain ?? '',
           jira_email: row.jira_email ?? '',
-          jira_token: '',
+          jira_api_token: '',
         });
       } catch (err) {
         setStatus(err.message);
@@ -86,8 +86,8 @@ export default function SettingsModal({ environmentId, environmentName, onClose,
               Trello API Key
               <input
                 style={styles.input}
-                name="trello_key"
-                value={form.trello_key}
+                name="trello_api_key"
+                value={form.trello_api_key}
                 onChange={handleChange}
               />
             </label>
@@ -126,10 +126,10 @@ export default function SettingsModal({ environmentId, environmentName, onClose,
               Jira API Token
               <input
                 style={styles.input}
-                name="jira_token"
+                name="jira_api_token"
                 type="password"
                 placeholder="Leave blank to keep current"
-                value={form.jira_token}
+                value={form.jira_api_token}
                 onChange={handleChange}
               />
             </label>

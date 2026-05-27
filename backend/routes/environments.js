@@ -5,6 +5,10 @@
 import { Router } from 'express';
 import { dbGet, dbAll, dbRun } from '../db.js';
 import { normalizeJiraDomain } from '../utils/domains.js';
+import {
+  parseEnvironmentCredentialsBody,
+  ENV_SELECT_COLUMNS,
+} from '../utils/envCredentials.js';
 import { fetchAllEnvironmentData } from '../services/environmentService.js';
 
 const router = Router();
@@ -12,10 +16,7 @@ const router = Router();
 router.get('/', async (_req, res) => {
   try {
     const rows = await dbAll(
-      `SELECT id, name, trello_key, trello_token, jira_domain, jira_email, jira_token,
-              created_at, updated_at
-       FROM environments
-       ORDER BY id`
+      `SELECT ${ENV_SELECT_COLUMNS} FROM environments ORDER BY id`
     );
     res.json(rows);
   } catch (err) {
@@ -24,14 +25,8 @@ router.get('/', async (_req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const {
-    name,
-    trello_key,
-    trello_token,
-    jira_domain,
-    jira_email,
-    jira_token,
-  } = req.body;
+  const { name } = req.body;
+  const creds = parseEnvironmentCredentialsBody(req.body);
 
   if (!name) {
     return res.status(400).json({ error: 'Environment name is required.' });
@@ -40,22 +35,20 @@ router.post('/', async (req, res) => {
   try {
     const result = await dbRun(
       `INSERT INTO environments (
-        name, trello_key, trello_token, jira_domain, jira_email, jira_token
+        name, trello_api_key, trello_token, jira_domain, jira_email, jira_api_token
       ) VALUES (?, ?, ?, ?, ?, ?)`,
       [
         name,
-        trello_key ?? '',
-        trello_token ?? '',
-        normalizeJiraDomain(jira_domain ?? ''),
-        jira_email ?? '',
-        jira_token ?? '',
+        creds.trello_api_key,
+        creds.trello_token,
+        normalizeJiraDomain(creds.jira_domain),
+        creds.jira_email,
+        creds.jira_api_token,
       ]
     );
 
     const row = await dbGet(
-      `SELECT id, name, trello_key, trello_token, jira_domain, jira_email, jira_token,
-              created_at, updated_at
-       FROM environments WHERE id = ?`,
+      `SELECT ${ENV_SELECT_COLUMNS} FROM environments WHERE id = ?`,
       [result.lastID]
     );
     res.status(201).json(row);
@@ -87,14 +80,8 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'Environment id must be a number.' });
   }
 
-  const {
-    name,
-    trello_key,
-    trello_token,
-    jira_domain,
-    jira_email,
-    jira_token,
-  } = req.body;
+  const { name } = req.body;
+  const creds = parseEnvironmentCredentialsBody(req.body);
 
   try {
     const existing = await dbGet('SELECT * FROM environments WHERE id = ?', [id]);
@@ -105,28 +92,26 @@ router.put('/:id', async (req, res) => {
     await dbRun(
       `UPDATE environments SET
         name = COALESCE(NULLIF(?, ''), name),
-        trello_key = COALESCE(NULLIF(?, ''), trello_key),
+        trello_api_key = COALESCE(NULLIF(?, ''), trello_api_key),
         trello_token = COALESCE(NULLIF(?, ''), trello_token),
         jira_domain = COALESCE(NULLIF(?, ''), jira_domain),
         jira_email = COALESCE(NULLIF(?, ''), jira_email),
-        jira_token = COALESCE(NULLIF(?, ''), jira_token),
+        jira_api_token = COALESCE(NULLIF(?, ''), jira_api_token),
         updated_at = datetime('now')
       WHERE id = ?`,
       [
         name ?? existing.name,
-        trello_key ?? '',
-        trello_token ?? '',
-        jira_domain ? normalizeJiraDomain(jira_domain) : '',
-        jira_email ?? '',
-        jira_token ?? '',
+        creds.trello_api_key,
+        creds.trello_token,
+        creds.jira_domain ? normalizeJiraDomain(creds.jira_domain) : '',
+        creds.jira_email,
+        creds.jira_api_token,
         id,
       ]
     );
 
     const row = await dbGet(
-      `SELECT id, name, trello_key, trello_token, jira_domain, jira_email, jira_token,
-              created_at, updated_at
-       FROM environments WHERE id = ?`,
+      `SELECT ${ENV_SELECT_COLUMNS} FROM environments WHERE id = ?`,
       [id]
     );
     res.json(row);
@@ -143,9 +128,7 @@ router.get('/:id', async (req, res) => {
 
   try {
     const row = await dbGet(
-      `SELECT id, name, trello_key, trello_token, jira_domain, jira_email, jira_token,
-              created_at, updated_at
-       FROM environments WHERE id = ?`,
+      `SELECT ${ENV_SELECT_COLUMNS} FROM environments WHERE id = ?`,
       [id]
     );
     if (!row) {

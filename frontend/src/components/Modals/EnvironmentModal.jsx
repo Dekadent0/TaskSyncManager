@@ -133,11 +133,11 @@ export function EnvironmentSetup({ onEnvironmentSaved, onBack }) {
         method: 'POST',
         body: JSON.stringify({
           name: trimmedName,
-          trello_key: form.trello_api_key,
+          trello_api_key: form.trello_api_key,
           trello_token: form.trello_token,
           jira_domain: form.jira_domain,
           jira_email: form.jira_email,
-          jira_token: form.jira_api_token,
+          jira_api_token: form.jira_api_token,
         }),
       });
       onEnvironmentSaved({ id: created.id, name: created.name });
