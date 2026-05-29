@@ -63,10 +63,6 @@ export default function LeftPanel({
   jiraBoards,
   rulesCount,
   onManageRules,
-  syncing,
-  syncStatus,
-  syncLog,
-  onSyncNow,
 }) {
   return (
     <aside style={styles.leftPanel}>
@@ -89,28 +85,10 @@ export default function LeftPanel({
 
       <section style={{ ...styles.leftSection, marginTop: 'auto' }}>
         <h2 style={styles.sectionTitle}>Sync:</h2>
-        <button
-          type="button"
-          style={styles.btnSync}
-          onClick={onSyncNow}
-          disabled={syncing}
-        >
-          {syncing ? 'Syncing…' : 'Sync Now'}
-        </button>
-        {syncing && syncStatus && (
-          <p style={styles.syncStatusLine}>{syncStatus}</p>
-        )}
-        <div style={styles.syncLogConsole} aria-live="polite">
-          {syncLog.length === 0 ? (
-            <div style={styles.syncLogLineMuted}>Sync results will appear here…</div>
-          ) : (
-            syncLog.map((line, i) => (
-              <div key={i} style={styles.syncLogLine}>
-                {line}
-              </div>
-            ))
-          )}
-        </div>
+        <p style={styles.hint}>
+          Changes sync automatically when Trello cards or Jira issues update
+          (webhooks).
+        </p>
       </section>
     </aside>
   );

@@ -348,5 +348,6 @@ export async function fetchJiraIssueDetails(credentials, issueKey) {
     summary: data.fields?.summary ?? data.key,
     description: data.fields?.description,
     statusId: data.fields?.status?.id,
+    statusName: data.fields?.status?.name,
   };
 }

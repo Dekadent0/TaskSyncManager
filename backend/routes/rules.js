@@ -10,6 +10,9 @@ import {
   formatSyncRule,
   defaultRuleName,
 } from '../utils/ruleValidation.js';
+import { scheduleWebhookRegistration } from '../services/webhookRegistrationService.js';
+import { loadEnvironmentCredentials } from '../services/environmentService.js';
+import { syncExistingItemsForRule } from '../services/syncEngine.js';
 
 const router = Router();
 
@@ -97,6 +100,8 @@ router.post('/', async (req, res) => {
       await dbGet('SELECT * FROM sync_rules WHERE id = ?', [result.lastID])
     );
 
+    scheduleWebhookRegistration(envId);
+
     res.status(201).json({
       ok: true,
       id: result.lastID,
@@ -104,6 +109,47 @@ router.post('/', async (req, res) => {
       direction: directionResult.direction,
       rule: row,
       message: 'Sync rule saved.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/sync-existing', async (req, res) => {
+  const ruleId = Number(req.params.id);
+  if (!ruleId || Number.isNaN(ruleId)) {
+    return res.status(400).json({ error: 'Rule id must be a number.' });
+  }
+
+  try {
+    const rule = await dbGet('SELECT * FROM sync_rules WHERE id = ?', [ruleId]);
+    if (!rule) {
+      return res.status(404).json({ error: 'Sync rule not found.' });
+    }
+
+    const envFromReq =
+      req.query.environmentId ||
+      req.query.environment_id ||
+      req.headers['x-environment-id'] ||
+      req.body?.environmentId ||
+      req.body?.environment_id;
+
+    if (envFromReq && Number(rule.environment_id) !== Number(envFromReq)) {
+      return res.status(403).json({
+        error: 'Rule does not belong to the specified environment.',
+      });
+    }
+
+    const credentials = await loadEnvironmentCredentials(rule.environment_id);
+    const result = await syncExistingItemsForRule(credentials, rule);
+
+    res.json({
+      ok: true,
+      ruleId,
+      direction: result.direction,
+      migrated: result.migrated,
+      details: result.details,
+      message: `Sync existing complete: ${result.migrated} item(s) migrated.`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -175,6 +221,7 @@ router.put('/:id', async (req, res) => {
     const row = formatSyncRule(
       await dbGet('SELECT * FROM sync_rules WHERE id = ?', [ruleId])
     );
+    scheduleWebhookRegistration(existing.environment_id);
     res.json({ ok: true, rule: row, message: 'Sync rule updated.' });
   } catch (err) {
     res.status(500).json({ error: err.message });

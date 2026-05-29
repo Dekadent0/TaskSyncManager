@@ -10,6 +10,10 @@ import {
   ENV_SELECT_COLUMNS,
 } from '../utils/envCredentials.js';
 import { fetchAllEnvironmentData } from '../services/environmentService.js';
+import {
+  scheduleWebhookRegistration,
+  deleteWebhooksForEnvironment,
+} from '../services/webhookRegistrationService.js';
 
 const router = Router();
 
@@ -51,6 +55,8 @@ router.post('/', async (req, res) => {
       `SELECT ${ENV_SELECT_COLUMNS} FROM environments WHERE id = ?`,
       [result.lastID]
     );
+    scheduleWebhookRegistration(result.lastID);
+
     res.status(201).json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -65,6 +71,7 @@ router.get('/:id/fetch-all', async (req, res) => {
 
   try {
     const data = await fetchAllEnvironmentData(id);
+    scheduleWebhookRegistration(id);
     res.json(data);
   } catch (err) {
     const status = err.response?.status || 500;
@@ -114,6 +121,7 @@ router.put('/:id', async (req, res) => {
       `SELECT ${ENV_SELECT_COLUMNS} FROM environments WHERE id = ?`,
       [id]
     );
+    scheduleWebhookRegistration(id);
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -152,7 +160,12 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Environment not found.' });
     }
 
+    await deleteWebhooksForEnvironment(id);
     await dbRun('DELETE FROM sync_rules WHERE environment_id = ?', [id]);
+    await dbRun(
+      'DELETE FROM webhook_registrations WHERE environment_id = ?',
+      [id]
+    );
     await dbRun('DELETE FROM environments WHERE id = ?', [id]);
 
     res.json({ ok: true, message: 'Environment deleted.' });

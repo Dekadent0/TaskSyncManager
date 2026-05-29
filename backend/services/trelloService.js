@@ -35,6 +35,13 @@ export async function trelloPut(credentials, path, body = {}) {
   return data;
 }
 
+export async function trelloDelete(credentials, path) {
+  const { data } = await axios.delete(`https://api.trello.com/1${path}`, {
+    params: trelloQuery(credentials),
+  });
+  return data;
+}
+
 export async function fetchTrelloBoardsWithLists(credentials) {
   const boards = await trelloGet(credentials, '/members/me/boards', {
     fields: 'id,name',
@@ -63,10 +70,56 @@ export async function fetchTrelloBoardCards(credentials, boardId) {
   });
 }
 
+export async function fetchTrelloCard(credentials, cardId) {
+  return trelloGet(credentials, `/cards/${cardId}`, {
+    fields: 'id,name,desc,idList,idBoard,url,shortUrl',
+  });
+}
+
+export async function deleteTrelloWebhook(credentials, webhookId) {
+  return trelloDelete(credentials, `/webhooks/${webhookId}`);
+}
+
+export function trelloCardMatchesJiraIssue(card, issueKey, issueSummary) {
+  const marker = JIRA_ISSUE_MARKER(issueKey);
+  const desc = card.desc || '';
+  const name = (card.name || '').trim();
+  const key = String(issueKey).trim();
+
+  if (desc.includes(marker)) return true;
+  if (desc.includes(key) || name.includes(key)) return true;
+
+  const summary = (issueSummary || '').trim();
+  if (summary && name.toLowerCase() === summary.toLowerCase()) return true;
+
+  return false;
+}
+
+export async function fetchTrelloListCards(credentials, listId) {
+  return trelloGet(credentials, `/lists/${listId}/cards`, {
+    fields: 'id,name,desc,idList,url,shortUrl',
+    filter: 'open',
+  });
+}
+
 export async function findTrelloCardByJiraIssue(credentials, boardId, issueKey) {
   const cards = await fetchTrelloBoardCards(credentials, boardId);
-  const marker = JIRA_ISSUE_MARKER(issueKey);
-  return cards.find((card) => (card.desc || '').includes(marker)) ?? null;
+  return (
+    cards.find((card) => trelloCardMatchesJiraIssue(card, issueKey)) ?? null
+  );
+}
+
+export async function findTrelloCardInListByJiraIssue(
+  credentials,
+  listId,
+  issueKey,
+  issueSummary
+) {
+  const cards = await fetchTrelloListCards(credentials, listId);
+  return (
+    cards.find((card) => trelloCardMatchesJiraIssue(card, issueKey, issueSummary)) ??
+    null
+  );
 }
 
 export async function createTrelloCardFromIssue(

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { API, apiRequest, withEnvironmentId } from '../../api.js';
-import { buildSyncLogLines } from '../../utils/syncLog.js';
 import { styles } from '../../styles/theme.js';
 import TopBar from '../Layout/TopBar.jsx';
 import LeftPanel from '../Layout/LeftPanel.jsx';
@@ -32,9 +31,6 @@ export default function DashboardView({
   const [loadingJiraIssues, setLoadingJiraIssues] = useState(false);
   const [viewerTick, setViewerTick] = useState(0);
 
-  const [syncStatus, setSyncStatus] = useState('');
-  const [syncLog, setSyncLog] = useState([]);
-  const [syncing, setSyncing] = useState(false);
   const [rules, setRules] = useState([]);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [jiraDomain, setJiraDomain] = useState('');
@@ -164,26 +160,6 @@ export default function DashboardView({
     };
   }, [viewJiraBoardId, environmentId, viewerTick]);
 
-  const handleSyncNow = async () => {
-    setSyncing(true);
-    setSyncStatus('Syncing…');
-    setSyncLog(['Running sync…']);
-    try {
-      const result = await apiRequest(`${API}/sync`, {
-        method: 'POST',
-        body: JSON.stringify({ environmentId }),
-      });
-      setSyncLog(buildSyncLogLines(result));
-      setSyncStatus('');
-      setViewerTick((t) => t + 1);
-    } catch (err) {
-      setSyncStatus('');
-      setSyncLog([`Sync failed: ${err.message}`]);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   return (
     <div style={styles.appShell}>
       <TopBar
@@ -201,10 +177,6 @@ export default function DashboardView({
           jiraBoards={jiraBoards}
           rulesCount={rules.length}
           onManageRules={() => setRulesOpen(true)}
-          syncing={syncing}
-          syncStatus={syncStatus}
-          syncLog={syncLog}
-          onSyncNow={handleSyncNow}
         />
 
         <main style={styles.rightPanel}>
