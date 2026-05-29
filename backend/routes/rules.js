@@ -13,6 +13,7 @@ import {
 import { scheduleWebhookRegistration } from '../services/webhookRegistrationService.js';
 import { loadEnvironmentCredentials } from '../services/environmentService.js';
 import { syncExistingItemsForRule } from '../services/syncEngine.js';
+import { appendSyncResultActivity } from '../services/syncActivityLog.js';
 
 const router = Router();
 
@@ -142,6 +143,7 @@ router.post('/:id/sync-existing', async (req, res) => {
 
     const credentials = await loadEnvironmentCredentials(rule.environment_id);
     const result = await syncExistingItemsForRule(credentials, rule);
+    appendSyncResultActivity(rule.environment_id, result, { source: 'sync-existing' });
 
     res.json({
       ok: true,

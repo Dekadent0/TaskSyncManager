@@ -14,6 +14,7 @@ import {
   scheduleWebhookRegistration,
   deleteWebhooksForEnvironment,
 } from '../services/webhookRegistrationService.js';
+import { getSyncActivity } from '../services/syncActivityLog.js';
 
 const router = Router();
 
@@ -58,6 +59,25 @@ router.post('/', async (req, res) => {
     scheduleWebhookRegistration(result.lastID);
 
     res.status(201).json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/:id/sync-activity', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id || Number.isNaN(id)) {
+    return res.status(400).json({ error: 'Environment id must be a number.' });
+  }
+
+  try {
+    const existing = await dbGet('SELECT id FROM environments WHERE id = ?', [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Environment not found.' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 30, 50);
+    res.json(getSyncActivity(id, limit));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

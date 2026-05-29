@@ -1,4 +1,58 @@
 import { styles } from '../../styles/theme.js';
+import { formatActivityTime, getActivityStatusLabel } from '../../utils/syncLog.js';
+
+function activityBadgeStyle(status) {
+  switch (status) {
+    case 'error':
+      return { ...styles.syncLogBadge, ...styles.syncLogBadgeError };
+    case 'skipped':
+      return { ...styles.syncLogBadge, ...styles.syncLogBadgeSkipped };
+    case 'info':
+      return { ...styles.syncLogBadge, ...styles.syncLogBadgeInfo };
+    default:
+      return { ...styles.syncLogBadge, ...styles.syncLogBadgeOk };
+  }
+}
+
+function SyncActivityList({ entries }) {
+  return (
+    <>
+      <h3 style={styles.syncLogHeading}>Recent Updates</h3>
+      <div style={styles.syncLogConsole} aria-live="polite">
+        {entries.length === 0 ? (
+          <div style={styles.syncLogLineMuted}>No recent activity</div>
+        ) : (
+          entries.map((entry, index) => (
+            <div
+              key={entry.id ?? index}
+              style={{
+                ...styles.syncLogEntry,
+                ...(index === entries.length - 1 ? styles.syncLogEntryLast : {}),
+              }}
+            >
+              {entry.status === 'error' && (
+                <span style={activityBadgeStyle(entry.status)}>
+                  {getActivityStatusLabel(entry.status)}
+                </span>
+              )}
+              <span
+                style={{
+                  ...styles.syncLogMessage,
+                  ...(entry.status === 'error' ? {} : { flex: '1 1 100%' }),
+                }}
+              >
+                {entry.message}
+              </span>
+              <span style={styles.syncLogTimestamp}>
+                {formatActivityTime(entry.timestamp)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </>
+  );
+}
 
 function DataSummary({ loading, fetchError, trelloBoards, jiraProjects, jiraBoards }) {
   return (
@@ -63,6 +117,7 @@ export default function LeftPanel({
   jiraBoards,
   rulesCount,
   onManageRules,
+  syncActivity = [],
 }) {
   return (
     <aside style={styles.leftPanel}>
@@ -89,6 +144,7 @@ export default function LeftPanel({
           Changes sync automatically when Trello cards or Jira issues update
           (webhooks).
         </p>
+        <SyncActivityList entries={syncActivity} />
       </section>
     </aside>
   );

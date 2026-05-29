@@ -102,6 +102,14 @@ export async function fetchTrelloListCards(credentials, listId) {
   });
 }
 
+export async function fetchTrelloListName(credentials, listId) {
+  if (!listId) return null;
+  const list = await trelloGet(credentials, `/lists/${listId}`, {
+    fields: 'name',
+  });
+  return list?.name ?? null;
+}
+
 export async function findTrelloCardByJiraIssue(credentials, boardId, issueKey) {
   const cards = await fetchTrelloBoardCards(credentials, boardId);
   return (

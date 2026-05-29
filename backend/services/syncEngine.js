@@ -10,6 +10,7 @@ import {
   fetchTrelloBoardCards,
   fetchTrelloCard,
   fetchTrelloListCards,
+  fetchTrelloListName,
   findTrelloCardByJiraIssue,
   findTrelloCardInListByJiraIssue,
   createTrelloCardFromIssue,
@@ -37,6 +38,7 @@ import {
   ruleMatchesJiraProject,
   ruleMatchesIncomingJiraStatus,
 } from '../utils/jiraRuleMatching.js';
+import { formatLocationLabel } from '../utils/syncActivityFormat.js';
 
 function resolveJiraBoardForRule(rule, jiraBoards) {
   let board = rule.jira_board_id
@@ -52,6 +54,18 @@ function resolveJiraBoardForRule(rule, jiraBoards) {
   }
 
   return board;
+}
+
+function resolveJiraStatusLabelForRule(rule, jiraBoards) {
+  const board = resolveJiraBoardForRule(rule, jiraBoards);
+  const column = board?.columns?.find(
+    (col) => String(col.id) === String(rule.jira_target_column_id)
+  );
+  return column?.name ?? rule.jira_target_column_id;
+}
+
+function jiraTargetColumnName(rule, jiraBoards) {
+  return formatLocationLabel(resolveJiraStatusLabelForRule(rule, jiraBoards));
 }
 
 /**
@@ -140,6 +154,9 @@ export async function syncRuleJiraToTrello(credentials, rule, jiraBoards) {
 
   const trelloTargetListId = rule.trello_source_column_id;
   const trelloBoardId = rule.trello_board_id;
+  const targetListName = formatLocationLabel(
+    await fetchTrelloListName(credentials, trelloTargetListId).catch(() => null)
+  );
 
   const issues = await fetchJiraBoardIssues(credentials, rule.jira_board_id);
   const inSourceStatus = issues.filter((issue) =>
@@ -176,6 +193,7 @@ export async function syncRuleJiraToTrello(credentials, rule, jiraBoards) {
           trelloCardId: card.id,
           trelloCardName: card.name,
           action: 'created',
+          targetListName,
         });
       } else if (String(card.idList) !== String(trelloTargetListId)) {
         await moveTrelloCardToList(credentials, card.id, trelloTargetListId);
@@ -188,6 +206,7 @@ export async function syncRuleJiraToTrello(credentials, rule, jiraBoards) {
           trelloCardName: card.name,
           action: 'moved',
           targetListId: trelloTargetListId,
+          targetListName,
         });
       } else {
         details.push({
@@ -439,6 +458,7 @@ export async function syncSingleTrelloCardToJira(
 
   const jiraTargetStatusId = rule.jira_target_column_id;
   const environmentId = rule.environment_id;
+  const targetColumnName = jiraTargetColumnName(rule, jiraBoards);
 
   try {
     const existingMapping = await getMappingByTrelloCard(environmentId, card.id);
@@ -470,6 +490,7 @@ export async function syncSingleTrelloCardToJira(
         trelloCardName: card.name,
         action: 'created',
         jiraIssueKey: created.key,
+        targetColumnName,
         trigger: 'webhook',
       });
     } else {
@@ -529,6 +550,7 @@ export async function syncSingleTrelloCardToJira(
             : 'transitioned_after_create',
         jiraIssueKey: issue.key,
         targetStatusId: jiraTargetStatusId,
+        targetColumnName,
         trigger: 'webhook',
       });
     } else {
@@ -555,6 +577,7 @@ export async function syncSingleTrelloCardToJira(
       trelloCardId: card.id,
       trelloCardName: card.name,
       error: err.response?.data?.errorMessages?.[0] || err.message,
+      targetColumnName,
       trigger: 'webhook',
     });
   }
@@ -676,6 +699,9 @@ export async function syncSingleJiraIssueToTrello(
   const trelloTargetListId = rule.trello_source_column_id;
   const trelloBoardId = rule.trello_board_id;
   const environmentId = rule.environment_id;
+  const targetListName = formatLocationLabel(
+    await fetchTrelloListName(credentials, trelloTargetListId).catch(() => null)
+  );
 
   try {
     let card = await resolveExistingTrelloCardForJiraIssue(
@@ -732,6 +758,7 @@ export async function syncSingleJiraIssueToTrello(
               trelloCardId: card.id,
               trelloCardName: card.name,
               action: 'created',
+              targetListName,
               trigger: 'webhook',
             });
           } else {
@@ -777,6 +804,7 @@ export async function syncSingleJiraIssueToTrello(
         trelloCardName: card.name,
         action: 'moved',
         targetListId: trelloTargetListId,
+        targetListName,
         trigger: 'webhook',
       });
     } else if (card) {
@@ -807,6 +835,7 @@ export async function syncSingleJiraIssueToTrello(
         err.response?.data?.errorMessages?.[0] ||
         err.response?.data?.message ||
         err.message,
+      targetListName,
       trigger: 'webhook',
     });
   }
@@ -1192,14 +1221,6 @@ export async function handleTrelloWebhook(payload, environmentId) {
   }
 }
 
-function resolveJiraStatusLabelForRule(rule, jiraBoards) {
-  const board = resolveJiraBoardForRule(rule, jiraBoards);
-  const column = board?.columns?.find(
-    (col) => String(col.id) === String(rule.jira_target_column_id)
-  );
-  return column?.name ?? rule.jira_target_column_id;
-}
-
 function resolveProjectKeyForRule(rule, jiraBoards) {
   const board = resolveJiraBoardForRule(rule, jiraBoards);
   if (board?.projectKey) return board.projectKey;
@@ -1471,6 +1492,10 @@ export async function syncExistingItemsForRule(credentials, rule) {
       };
     }
 
+    const targetListName = formatLocationLabel(
+      await fetchTrelloListName(credentials, rule.trello_source_column_id).catch(() => null)
+    );
+
   const issues = await fetchJiraBoardIssues(credentials, rule.jira_board_id);
   const inSourceStatus = issues.filter((issue) =>
     ruleMatchesIncomingJiraStatus(
@@ -1532,10 +1557,13 @@ export async function syncExistingItemsForRule(credentials, rule) {
         migrated += 1;
         details.push({
           ruleId: rule.id,
+          direction: 'jira-to-trello',
           jiraIssueKey: issue.key,
+          jiraIssueSummary: issue.summary,
           trelloCardId: card.id,
           trelloCardName: card.name,
           action: 'migrated',
+          targetListName,
         });
       } catch (err) {
         details.push({
@@ -1570,6 +1598,8 @@ export async function syncExistingItemsForRule(credentials, rule) {
     key: board.projectKey,
     name: board.projectName,
   };
+
+  const targetColumnName = jiraTargetColumnName(rule, jiraBoards);
 
   const cards = await fetchTrelloBoardCards(credentials, rule.trello_board_id);
   const inSourceList = cards.filter(
@@ -1622,10 +1652,12 @@ export async function syncExistingItemsForRule(credentials, rule) {
       migrated += 1;
       details.push({
         ruleId: rule.id,
+        direction: 'trello-to-jira',
         trelloCardId: card.id,
         trelloCardName: card.name,
         jiraIssueKey: created.key,
         action: 'migrated',
+        targetColumnName,
       });
     } catch (err) {
       details.push({

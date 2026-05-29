@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { API, apiRequest, withEnvironmentId } from '../../api.js';
+import { formatActivityEntry } from '../../utils/syncLog.js';
 import { styles } from '../../styles/theme.js';
 import TopBar from '../Layout/TopBar.jsx';
 import LeftPanel from '../Layout/LeftPanel.jsx';
@@ -30,6 +31,8 @@ export default function DashboardView({
   const [loadingTrelloCards, setLoadingTrelloCards] = useState(false);
   const [loadingJiraIssues, setLoadingJiraIssues] = useState(false);
   const [viewerTick, setViewerTick] = useState(0);
+  const [syncActivity, setSyncActivity] = useState([]);
+  const lastActivityIdRef = useRef(null);
 
   const [rules, setRules] = useState([]);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -107,6 +110,41 @@ export default function DashboardView({
   }, [environmentId]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const pollSyncActivity = async () => {
+      try {
+        const rows = await apiRequest(
+          `${API}/environments/${environmentId}/sync-activity`
+        );
+        if (!cancelled && Array.isArray(rows)) {
+          setSyncActivity(
+            rows.map(formatActivityEntry).filter(Boolean)
+          );
+        }
+      } catch {
+        if (!cancelled) setSyncActivity([]);
+      }
+    };
+
+    pollSyncActivity();
+    const intervalId = setInterval(pollSyncActivity, 4000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [environmentId]);
+
+  useEffect(() => {
+    const latestId = syncActivity[0]?.id;
+    if (latestId && latestId !== lastActivityIdRef.current) {
+      lastActivityIdRef.current = latestId;
+      setViewerTick((t) => t + 1);
+    }
+  }, [syncActivity]);
+
+  useEffect(() => {
     if (!viewTrelloBoardId) {
       setTrelloCards([]);
       return;
@@ -177,6 +215,7 @@ export default function DashboardView({
           jiraBoards={jiraBoards}
           rulesCount={rules.length}
           onManageRules={() => setRulesOpen(true)}
+          syncActivity={syncActivity}
         />
 
         <main style={styles.rightPanel}>

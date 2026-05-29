@@ -26,6 +26,10 @@ import {
   handleTrelloWebhook,
   handleJiraWebhook,
 } from '../services/syncEngine.js';
+import {
+  appendSyncActivity,
+  appendSyncResultActivity,
+} from '../services/syncActivityLog.js';
 
 const router = Router();
 
@@ -68,6 +72,7 @@ function runTrelloBackgroundSync(payload, environmentId, cardId) {
       console.log('[Sync Engine] Checking rules for list:', listAfterId, `(${listAfterName})`);
 
       const result = await handleTrelloWebhook(payload, environmentId);
+      appendSyncResultActivity(environmentId, result, { source: 'webhook' });
 
       console.log('[Sync Engine] Background sync completed:', {
         cardId: result.cardId ?? cardId,
@@ -76,6 +81,11 @@ function runTrelloBackgroundSync(payload, environmentId, cardId) {
         detailCount: result.details?.length ?? 0,
       });
     } catch (error) {
+      appendSyncActivity(environmentId, {
+        status: 'error',
+        message: "Couldn't sync to Jira",
+        source: 'webhook',
+      });
       console.error('[Sync Engine ERROR] Background synchronization failed:', error);
       if (error?.stack) {
         console.error(error.stack);
@@ -121,6 +131,7 @@ function runJiraBackgroundSync(payload, environmentId) {
       }
 
       const result = await handleJiraWebhook(payload, environmentId);
+      appendSyncResultActivity(environmentId, result, { source: 'webhook' });
 
       console.log('[Jira Sync] Background sync completed:', {
         issueKey: result.issueKey,
@@ -129,6 +140,11 @@ function runJiraBackgroundSync(payload, environmentId) {
         detailCount: result.details?.length ?? 0,
       });
     } catch (error) {
+      appendSyncActivity(environmentId, {
+        status: 'error',
+        message: "Couldn't sync to Trello",
+        source: 'webhook',
+      });
       console.error('[Jira Sync ERROR] Background process crashed:', error);
       if (error?.stack) {
         console.error(error.stack);

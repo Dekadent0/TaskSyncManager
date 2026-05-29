@@ -17,6 +17,7 @@ import {
   fetchJiraBoardIssues,
 } from '../services/jiraService.js';
 import { runManualSync } from '../services/syncEngine.js';
+import { appendSyncResultActivity } from '../services/syncActivityLog.js';
 
 const router = Router();
 
@@ -155,6 +156,7 @@ router.post('/sync', async (req, res) => {
 
     const credentials = await loadEnvironmentCredentials(environmentId);
     const result = await runManualSync(credentials, environmentId);
+    appendSyncResultActivity(environmentId, result, { source: 'manual' });
     res.json(result);
   } catch (err) {
     const status = err.response?.status || 500;
