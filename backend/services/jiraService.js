@@ -231,6 +231,75 @@ export async function fetchJiraBoardIssues(credentials, boardId) {
   }));
 }
 
+function escapeJqlString(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Fetch all issues in a project with a given status (JQL by name, fallback to id).
+ */
+export async function fetchJiraIssuesByProjectAndStatus(
+  credentials,
+  projectKey,
+  statusName,
+  statusId
+) {
+  const client = axios.create(jiraAuthConfig(credentials));
+  const proj = escapeJqlString(projectKey);
+
+  let jql;
+  if (statusName) {
+    jql = `project = "${proj}" AND status = "${escapeJqlString(statusName)}"`;
+  } else if (statusId) {
+    jql = `project = "${proj}" AND status = "${escapeJqlString(statusId)}"`;
+  } else {
+    throw new Error('statusName or statusId is required for Jira bulk sync');
+  }
+
+  const collected = [];
+  let startAt = 0;
+  let nextPageToken = null;
+  const maxResults = 50;
+  const fields = 'summary,status';
+
+  for (;;) {
+    const params = nextPageToken
+      ? { nextPageToken, maxResults, fields }
+      : { jql, startAt, maxResults, fields };
+
+    const { data } = await client.get('/rest/api/3/search/jql', { params });
+
+    const batch = data.issues ?? [];
+    collected.push(...batch);
+
+    if (data.isLast === true || batch.length === 0) {
+      break;
+    }
+
+    if (data.nextPageToken) {
+      nextPageToken = data.nextPageToken;
+      continue;
+    }
+
+    startAt += batch.length;
+    const total = data.total;
+    if (total != null && startAt >= total) {
+      break;
+    }
+    if (batch.length < maxResults) {
+      break;
+    }
+  }
+
+  return collected.map((issue) => ({
+    id: issue.id,
+    key: issue.key,
+    summary: issue.fields?.summary ?? issue.key,
+    statusId: issue.fields?.status?.id,
+    statusName: issue.fields?.status?.name,
+  }));
+}
+
 export async function findJiraIssueByTrelloCard(credentials, projectKey, cardId) {
   const client = axios.create(jiraAuthConfig(credentials));
   const marker = TRELLO_CARD_MARKER(cardId);

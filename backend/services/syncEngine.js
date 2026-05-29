@@ -9,6 +9,7 @@ import { loadEnvironmentCredentials } from './environmentService.js';
 import {
   fetchTrelloBoardCards,
   fetchTrelloCard,
+  fetchTrelloListCards,
   findTrelloCardByJiraIssue,
   findTrelloCardInListByJiraIssue,
   createTrelloCardFromIssue,
@@ -19,6 +20,7 @@ import {
   createJiraIssueFromCard,
   transitionJiraIssueToStatus,
   fetchJiraBoardIssues,
+  fetchJiraIssuesByProjectAndStatus,
   fetchJiraIssueDetails,
   jiraDescriptionToPlainText,
 } from './jiraService.js';
@@ -296,6 +298,30 @@ async function resolveJiraIssueForTrelloCard(
   }
 }
 
+/** Prevents concurrent bulk status syncs for the same Jira project column. */
+const activeJiraStatusSyncs = new Set();
+const JIRA_STATUS_SYNC_LOCK_MS = 5000;
+
+function releaseJiraStatusSyncLock(syncKey) {
+  if (!syncKey) return;
+  setTimeout(
+    () => activeJiraStatusSyncs.delete(String(syncKey)),
+    JIRA_STATUS_SYNC_LOCK_MS
+  );
+}
+
+/** Prevents concurrent bulk list syncs for the same Trello list (webhook bursts). */
+const activeTrelloListSyncs = new Set();
+const TRELLO_LIST_SYNC_LOCK_MS = 5000;
+
+function releaseTrelloListSyncLock(listId) {
+  if (!listId) return;
+  setTimeout(
+    () => activeTrelloListSyncs.delete(String(listId)),
+    TRELLO_LIST_SYNC_LOCK_MS
+  );
+}
+
 /** Prevents concurrent Trello card creation for the same Jira issue (rapid webhooks). */
 const activeJiraIssueCreates = new Set();
 const JIRA_ISSUE_CREATE_LOCK_MS = 3000;
@@ -537,13 +563,75 @@ export async function syncSingleTrelloCardToJira(
 }
 
 /**
+ * Bulk list sync: align every card in the rule's Trello source list with Jira.
+ */
+export async function syncTrelloListToJiraForRule(credentials, rule, jiraBoards) {
+  const listId = rule.trello_source_column_id;
+  const details = [];
+  let synced = 0;
+
+  const cards = await fetchTrelloListCards(credentials, listId);
+  console.log(
+    `[Sync Engine] Bulk list sync for rule ${rule.id}: ${cards.length} card(s) in list ${listId}`
+  );
+
+  for (const card of cards) {
+    const result = await syncSingleTrelloCardToJira(
+      credentials,
+      rule,
+      card,
+      jiraBoards
+    );
+    synced += result.synced;
+    details.push(...result.details);
+  }
+
+  return { synced, details, listId, cardCount: cards.length };
+}
+
+/**
+ * Run bulk list sync under a list-level lock (idempotent across rapid webhooks).
+ */
+async function runTrelloListBulkSync(credentials, rule, jiraBoards) {
+  const listId = String(rule.trello_source_column_id);
+
+  if (activeTrelloListSyncs.has(listId)) {
+    console.log(
+      `[Sync Engine] Bulk sync for list ${listId} already in progress. Skipping duplicate cascade.`
+    );
+    return {
+      synced: 0,
+      details: [
+        {
+          ruleId: rule.id,
+          direction: 'trello-to-jira',
+          action: 'skipped_list_sync_in_progress',
+          listId,
+        },
+      ],
+      listId,
+      cardCount: 0,
+      skipped: true,
+    };
+  }
+
+  activeTrelloListSyncs.add(listId);
+  try {
+    return await syncTrelloListToJiraForRule(credentials, rule, jiraBoards);
+  } finally {
+    releaseTrelloListSyncLock(listId);
+  }
+}
+
+/**
  * Sync a single Jira issue for one jira-to-trello rule when the issue is in the source status.
  */
 export async function syncSingleJiraIssueToTrello(
   credentials,
   rule,
   issue,
-  jiraBoards
+  jiraBoards,
+  options = {}
 ) {
   const details = [];
   let synced = 0;
@@ -551,7 +639,10 @@ export async function syncSingleJiraIssueToTrello(
 
   const statusId = issue.statusId ?? issue.fields?.status?.id;
   const statusName = issue.statusName ?? issue.fields?.status?.name;
-  if (!ruleMatchesIncomingJiraStatus(rule, statusId, statusName, jiraBoards)) {
+  if (
+    !options.skipStatusCheck &&
+    !ruleMatchesIncomingJiraStatus(rule, statusId, statusName, jiraBoards)
+  ) {
     console.log(
       `[Jira Sync] Rule ${rule.id}: issue not in source status (actual id=${statusId}, name=${statusName}, rule=${rule.jira_target_column_id})`
     );
@@ -723,6 +814,195 @@ export async function syncSingleJiraIssueToTrello(
   return { synced, details };
 }
 
+/**
+ * Bulk status sync: align every issue in the rule's Jira source status with Trello.
+ */
+export async function syncJiraStatusToTrelloForRule(credentials, rule, jiraBoards) {
+  const projectKey = resolveProjectKeyForRule(rule, jiraBoards);
+  const { statusId, statusName } = resolveJiraStatusQueryForRule(rule, jiraBoards);
+
+  let issues;
+  try {
+    issues = await fetchJiraIssuesByProjectAndStatus(
+      credentials,
+      projectKey,
+      statusName,
+      statusId
+    );
+  } catch (err) {
+    const status = err.response?.status;
+    const msg =
+      err.response?.data?.errorMessages?.join('; ') ||
+      err.response?.data?.message ||
+      err.message;
+    console.error(
+      `[Jira Sync ERROR] Bulk fetch failed for project ${projectKey}, status ${statusName ?? statusId}:`,
+      status ? `HTTP ${status}` : '',
+      msg
+    );
+    throw err;
+  }
+
+  console.log(
+    `[Jira Sync] Bulk status sync for rule ${rule.id}: ${issues.length} issue(s) in project ${projectKey}, status ${statusName ?? statusId}`
+  );
+
+  let synced = 0;
+  const details = [];
+
+  for (const issue of issues) {
+    try {
+      const result = await syncSingleJiraIssueToTrello(
+        credentials,
+        rule,
+        issue,
+        jiraBoards,
+        { skipStatusCheck: true }
+      );
+      synced += result.synced;
+      details.push(...result.details);
+    } catch (err) {
+      console.error(
+        `[Jira Sync ERROR] Bulk loop failed for issue ${issue.key}:`,
+        err.response?.data?.errorMessages?.[0] || err.message
+      );
+      details.push({
+        ruleId: rule.id,
+        direction: 'jira-to-trello',
+        jiraIssueKey: issue.key,
+        action: 'bulk_issue_sync_failed',
+        error: err.response?.data?.errorMessages?.[0] || err.message,
+      });
+    }
+  }
+
+  return {
+    synced,
+    details,
+    projectKey,
+    statusName: statusName ?? statusId,
+    issueCount: issues.length,
+  };
+}
+
+/**
+ * Run bulk Jira status sync under a project+status lock (idempotent across rapid webhooks).
+ * Falls back to syncing triggerIssue alone if the bulk JQL fetch fails.
+ */
+async function runJiraStatusBulkSync(
+  credentials,
+  rule,
+  jiraBoards,
+  triggerIssue = null
+) {
+  const syncKey = jiraStatusBulkSyncKey(rule, jiraBoards);
+
+  if (activeJiraStatusSyncs.has(syncKey)) {
+    console.log(
+      `[Jira Sync] Bulk sync for ${syncKey} already in progress. Skipping duplicate cascade.`
+    );
+    return {
+      synced: 0,
+      details: [
+        {
+          ruleId: rule.id,
+          direction: 'jira-to-trello',
+          action: 'skipped_status_sync_in_progress',
+          syncKey,
+        },
+      ],
+      projectKey: resolveProjectKeyForRule(rule, jiraBoards),
+      issueCount: 0,
+      skipped: true,
+    };
+  }
+
+  activeJiraStatusSyncs.add(syncKey);
+  try {
+    return await syncJiraStatusToTrelloForRule(credentials, rule, jiraBoards);
+  } catch (bulkErr) {
+    const bulkMsg =
+      bulkErr.response?.data?.errorMessages?.join('; ') ||
+      bulkErr.response?.data?.message ||
+      bulkErr.message;
+
+    if (!triggerIssue?.key) {
+      console.error(
+        '[Jira Sync ERROR] Bulk status sync failed with no trigger issue to fall back on:',
+        bulkMsg
+      );
+      return {
+        synced: 0,
+        details: [
+          {
+            ruleId: rule.id,
+            direction: 'jira-to-trello',
+            action: 'bulk_fetch_failed',
+            error: bulkMsg,
+          },
+        ],
+        projectKey: resolveProjectKeyForRule(rule, jiraBoards),
+        issueCount: 0,
+        bulkFailed: true,
+      };
+    }
+
+    console.warn(
+      `[Jira Sync] Bulk fetch failed; falling back to trigger issue sync for ${triggerIssue.key}`
+    );
+
+    try {
+      const fallback = await syncSingleJiraIssueToTrello(
+        credentials,
+        rule,
+        triggerIssue,
+        jiraBoards
+      );
+      return {
+        synced: fallback.synced,
+        details: [
+          ...fallback.details,
+          {
+            ruleId: rule.id,
+            direction: 'jira-to-trello',
+            jiraIssueKey: triggerIssue.key,
+            action: 'bulk_fetch_failed_fallback',
+            error: bulkMsg,
+          },
+        ],
+        projectKey: resolveProjectKeyForRule(rule, jiraBoards),
+        issueCount: 1,
+        bulkFailed: true,
+        fallback: true,
+      };
+    } catch (fallbackErr) {
+      console.error(
+        `[Jira Sync ERROR] Trigger issue fallback also failed for ${triggerIssue.key}:`,
+        fallbackErr.response?.data?.errorMessages?.[0] || fallbackErr.message
+      );
+      return {
+        synced: 0,
+        details: [
+          {
+            ruleId: rule.id,
+            direction: 'jira-to-trello',
+            jiraIssueKey: triggerIssue.key,
+            action: 'bulk_and_fallback_failed',
+            error: fallbackErr.response?.data?.errorMessages?.[0] || fallbackErr.message,
+            bulkError: bulkMsg,
+          },
+        ],
+        projectKey: resolveProjectKeyForRule(rule, jiraBoards),
+        issueCount: 0,
+        bulkFailed: true,
+        fallbackFailed: true,
+      };
+    }
+  } finally {
+    releaseJiraStatusSyncLock(syncKey);
+  }
+}
+
 function extractTrelloWebhookContext(payload) {
   if (isTrelloPositionOnlyAction(payload)) {
     return null;
@@ -882,19 +1162,27 @@ export async function handleTrelloWebhook(payload, environmentId) {
     const details = [];
 
     for (const rule of matchingRules) {
-      console.log(`[Sync Engine] Running sync for rule ${rule.id} (${rule.name})`);
-      const result = await syncSingleTrelloCardToJira(
-        credentials,
-        rule,
-        card,
-        jiraBoards
+      console.log(
+        `[Sync Engine] Running bulk list sync for rule ${rule.id} (${rule.name}), list ${rule.trello_source_column_id}`
       );
+      const result = await runTrelloListBulkSync(credentials, rule, jiraBoards);
       synced += result.synced;
       details.push(...result.details);
-      console.log(`[Sync Engine] Rule ${rule.id} result:`, result.details);
+      console.log(`[Sync Engine] Rule ${rule.id} bulk result:`, {
+        listId: result.listId,
+        cardCount: result.cardCount,
+        synced: result.synced,
+        skipped: result.skipped ?? false,
+      });
     }
 
-    return { synced, details, cardId: context.cardId, boardId: context.boardId };
+    return {
+      synced,
+      details,
+      cardId: context.cardId,
+      boardId: context.boardId,
+      bulkListSync: true,
+    };
   } catch (error) {
     console.error('[Sync Engine ERROR] Background synchronization failed:', error);
     if (error?.stack) {
@@ -912,10 +1200,65 @@ function resolveJiraStatusLabelForRule(rule, jiraBoards) {
   return column?.name ?? rule.jira_target_column_id;
 }
 
+function resolveProjectKeyForRule(rule, jiraBoards) {
+  const board = resolveJiraBoardForRule(rule, jiraBoards);
+  if (board?.projectKey) return board.projectKey;
+
+  const raw = String(rule.jira_project_id ?? '').trim();
+  if (raw && !/^\d+$/.test(raw)) return raw;
+
+  return board?.projectKey ?? raw;
+}
+
+function resolveJiraStatusQueryForRule(rule, jiraBoards) {
+  const board = resolveJiraBoardForRule(rule, jiraBoards);
+  const ruleStored = normalizeJiraCompareValue(rule.jira_target_column_id);
+
+  const column = board?.columns?.find((col) => {
+    const colId = normalizeJiraCompareValue(col.id);
+    const colName = normalizeJiraCompareValue(col.name);
+    const statusName = normalizeJiraCompareValue(col.statusName);
+    const columnName = normalizeJiraCompareValue(col.columnName);
+
+    return (
+      ruleStored === colId ||
+      ruleStored === colName ||
+      ruleStored === statusName ||
+      ruleStored === columnName
+    );
+  });
+
+  if (column) {
+    return {
+      statusId: column.id,
+      statusName: column.statusName || column.columnName || null,
+    };
+  }
+
+  const asId = String(rule.jira_target_column_id ?? '');
+  if (/^\d+$/.test(asId)) {
+    return { statusId: asId, statusName: null };
+  }
+
+  return { statusId: null, statusName: asId };
+}
+
+function jiraStatusBulkSyncKey(rule, jiraBoards) {
+  const projectKey = resolveProjectKeyForRule(rule, jiraBoards);
+  const { statusId, statusName } = resolveJiraStatusQueryForRule(rule, jiraBoards);
+  return `${projectKey}:${statusId ?? statusName}`;
+}
+
 /**
  * Process an incoming Jira webhook payload for an environment.
  */
 export async function handleJiraWebhook(payload, environmentId) {
+  let matchingRules = [];
+  let issueForSync = null;
+  let credentials = null;
+  let jiraBoards = [];
+  let triggerIssueKey = null;
+
   try {
     const rawIssue = payload?.issue;
     console.log(
@@ -937,8 +1280,8 @@ export async function handleJiraWebhook(payload, environmentId) {
       return { synced: 0, details: [], message: 'Ignored Jira event (no issue).' };
     }
 
-    const credentials = await loadEnvironmentCredentials(environmentId);
-    const jiraBoards = await fetchJiraBoardsWithColumns(credentials);
+    credentials = await loadEnvironmentCredentials(environmentId);
+    jiraBoards = await fetchJiraBoardsWithColumns(credentials);
 
     const allRules = await dbAll(
       `SELECT * FROM sync_rules
@@ -971,12 +1314,13 @@ export async function handleJiraWebhook(payload, environmentId) {
       issue.statusName ??
       rawIssue?.fields?.status?.name;
 
-    const issueForSync = {
+    issueForSync = {
       key: fullIssue.key,
       summary: fullIssue.summary,
       statusId: incomingStatusId,
       statusName: incomingStatusName,
     };
+    triggerIssueKey = issueForSync.key;
 
     console.log('[Jira Sync] Live issue from Jira API:', {
       key: issueForSync.key,
@@ -985,7 +1329,7 @@ export async function handleJiraWebhook(payload, environmentId) {
       summary: issueForSync.summary,
     });
 
-    const matchingRules = rules.filter((rule) =>
+    matchingRules = rules.filter((rule) =>
       ruleMatchesIncomingJiraStatus(
         rule,
         incomingStatusId,
@@ -1035,24 +1379,70 @@ export async function handleJiraWebhook(payload, environmentId) {
     const details = [];
 
     for (const rule of matchingRules) {
-      console.log(`[Jira Sync] Running sync for rule ${rule.id} (${rule.name})`);
-      const result = await syncSingleJiraIssueToTrello(
+      const statusQuery = resolveJiraStatusQueryForRule(rule, jiraBoards);
+      console.log(
+        `[Jira Sync] Running bulk status sync for rule ${rule.id} (${rule.name}), project ${resolveProjectKeyForRule(rule, jiraBoards)}, status ${statusQuery.statusName ?? statusQuery.statusId}`
+      );
+      const result = await runJiraStatusBulkSync(
         credentials,
         rule,
-        issueForSync,
-        jiraBoards
+        jiraBoards,
+        issueForSync
       );
       synced += result.synced;
       details.push(...result.details);
-      console.log(`[Jira Sync] Rule ${rule.id} result:`, result.details);
+      console.log(`[Jira Sync] Rule ${rule.id} bulk result:`, {
+        projectKey: result.projectKey,
+        statusName: result.statusName,
+        issueCount: result.issueCount,
+        synced: result.synced,
+        skipped: result.skipped ?? false,
+        bulkFailed: result.bulkFailed ?? false,
+        fallback: result.fallback ?? false,
+      });
     }
 
-    return { synced, details, issueKey: issue.key };
+    return { synced, details, issueKey: issue.key, bulkStatusSync: true };
   } catch (error) {
     console.error('[Jira Sync ERROR] Background process crashed:', error);
     if (error?.stack) {
       console.error(error.stack);
     }
+
+    if (matchingRules.length && issueForSync?.key && credentials && jiraBoards.length) {
+      console.warn(
+        `[Jira Sync] Attempting last-resort sync for trigger issue ${issueForSync.key}`
+      );
+      let recoveredSynced = 0;
+      const recoveredDetails = [];
+      for (const rule of matchingRules) {
+        try {
+          const fallback = await syncSingleJiraIssueToTrello(
+            credentials,
+            rule,
+            issueForSync,
+            jiraBoards
+          );
+          recoveredSynced += fallback.synced;
+          recoveredDetails.push(...fallback.details);
+        } catch (fallbackErr) {
+          console.error(
+            `[Jira Sync ERROR] Last-resort sync failed for ${issueForSync.key}:`,
+            fallbackErr.message
+          );
+        }
+      }
+      if (recoveredSynced > 0 || recoveredDetails.length > 0) {
+        return {
+          synced: recoveredSynced,
+          details: recoveredDetails,
+          issueKey: triggerIssueKey ?? issueForSync.key,
+          bulkStatusSync: false,
+          recoveredFromError: true,
+        };
+      }
+    }
+
     throw error;
   }
 }
