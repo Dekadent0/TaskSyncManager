@@ -31,18 +31,6 @@ function tryRenameColumn(table, from, to) {
 
 db.serialize(() => {
   db.run(`
-    CREATE TABLE IF NOT EXISTS credentials (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      trello_api_key TEXT,
-      trello_token TEXT,
-      jira_domain TEXT,
-      jira_email TEXT,
-      jira_api_token TEXT,
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.run(`
     CREATE TABLE IF NOT EXISTS environments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,

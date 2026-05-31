@@ -6,6 +6,7 @@ dist/
 _MACPATH
 Thumbs.db
 db.js.swp
+SETUP.md
 
 # IDE/Code editor settings
 .vscode/

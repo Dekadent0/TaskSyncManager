@@ -48,7 +48,3 @@ export function getSyncActivity(environmentId, limit = 30) {
   const list = logsByEnvironment.get(envId) ?? [];
   return list.slice(0, Math.min(limit, MAX_ENTRIES));
 }
-
-export function clearSyncActivity(environmentId) {
-  logsByEnvironment.delete(Number(environmentId));
-}
