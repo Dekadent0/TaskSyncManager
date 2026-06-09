@@ -116,6 +116,10 @@ router.post('/', async (req, res) => {
   }
 });
 
+/**
+ * Backfill existing tasks for one rule (manual / API trigger).
+ * Does not run on webhooks — use when a new rule is added and old cards/issues need pairing.
+ */
 router.post('/:id/sync-existing', async (req, res) => {
   const ruleId = Number(req.params.id);
   if (!ruleId || Number.isNaN(ruleId)) {
@@ -143,6 +147,7 @@ router.post('/:id/sync-existing', async (req, res) => {
 
     const credentials = await loadEnvironmentCredentials(rule.environment_id);
     const result = await syncExistingItemsForRule(credentials, rule);
+    // Only user-visible outcomes (migrated items) appear in the dashboard activity log.
     appendSyncResultActivity(rule.environment_id, result, { source: 'sync-existing' });
 
     res.json({

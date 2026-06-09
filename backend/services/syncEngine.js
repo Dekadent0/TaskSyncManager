@@ -97,7 +97,12 @@ async function recreateJiraIssueAfterDeletedMapping(
   );
   await deleteMappingByTrelloCard(environmentId, card.id);
 
-  const created = await createJiraIssueFromCard(credentials, project, card);
+  const created = await createJiraIssueFromCard(
+    credentials,
+    project,
+    card,
+    rule.jira_target_column_id
+  );
   await upsertItemMapping({
     environmentId,
     syncRuleId: rule.id,
@@ -305,7 +310,12 @@ export async function syncSingleTrelloCardToJira(
       console.log(
         `[Sync Engine] Rule ${rule.id}: creating Jira issue for Trello card ${card.id}`
       );
-      const created = await createJiraIssueFromCard(credentials, project, card);
+      const created = await createJiraIssueFromCard(
+        credentials,
+        project,
+        card,
+        jiraTargetStatusId
+      );
       issue = { key: created.key, fields: { status: null } };
       await upsertItemMapping({
         environmentId,
@@ -1299,8 +1309,19 @@ export async function handleJiraWebhook(payload, environmentId) {
 }
 
 /**
- * Backfill: create destination items only for source items not yet linked (by ID/marker/mapping).
- * Does not move or transition items that already exist on both sides.
+ * One-time backfill for items that already sat on the rule's SOURCE side before webhooks applied.
+ *
+ * Unlike webhook sync (syncSingle*), this function:
+ * - Only looks at items already in the source list (Trello) or source status (Jira).
+ * - Never moves cards/issues that are already paired on both tools.
+ * - Creates missing destination items only when no link exists yet.
+ *
+ * Per-item decision tree (same for both directions):
+ *   1. Already in sync_item_mappings? → skip
+ *   2. Matching item found on destination (search/marker) but not mapped? → link only, skip
+ *   3. Nothing on destination? → create item + save mapping (counts as migrated)
+ *
+ * Triggered by POST /api/rules/:id/sync-existing (not the live webhook path).
  */
 export async function syncExistingItemsForRule(credentials, rule) {
   const jiraBoards = await fetchJiraBoardsWithColumns(credentials);
@@ -1308,6 +1329,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
   const details = [];
   let migrated = 0;
 
+  // --- Jira → Trello: source = Jira status, destination = Trello list ---
   if (direction === 'jira-to-trello') {
     const board = resolveJiraBoardForRule(rule, jiraBoards);
     if (!board) {
@@ -1326,18 +1348,20 @@ export async function syncExistingItemsForRule(credentials, rule) {
       await fetchTrelloListName(credentials, rule.trello_source_column_id).catch(() => null)
     );
 
-  const issues = await fetchJiraBoardIssues(credentials, rule.jira_board_id);
-  const inSourceStatus = issues.filter((issue) =>
-    ruleMatchesIncomingJiraStatus(
-      rule,
-      issue.statusId,
-      issue.statusName,
-      jiraBoards
-    )
-  );
+    // All issues on the rule's Jira board, then keep only those in the rule's source status.
+    const issues = await fetchJiraBoardIssues(credentials, rule.jira_board_id);
+    const inSourceStatus = issues.filter((issue) =>
+      ruleMatchesIncomingJiraStatus(
+        rule,
+        issue.statusId,
+        issue.statusName,
+        jiraBoards
+      )
+    );
 
     for (const issue of inSourceStatus) {
       try {
+        // Step 1: skip if we already recorded this Jira issue ↔ Trello card pair.
         const mapping = await getMappingByJiraIssue(rule.environment_id, issue.key);
         if (mapping?.trello_card_id) {
           details.push({
@@ -1348,6 +1372,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
           continue;
         }
 
+        // Step 2: card may exist on the Trello board (title/desc marker) without a DB mapping — link only.
         let card = await findTrelloCardByJiraIssue(
           credentials,
           rule.trello_board_id,
@@ -1370,6 +1395,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
           continue;
         }
 
+        // Step 3: no Trello card yet — create in the rule's target list and persist mapping.
         const fullIssue = await fetchJiraIssueDetails(credentials, issue.key);
         const plainDesc = jiraDescriptionToPlainText(fullIssue.description);
         card = await createTrelloCardFromIssue(
@@ -1410,6 +1436,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
     return { migrated, details, direction };
   }
 
+  // --- Trello → Jira: source = Trello list, destination = Jira status/column ---
   const board = resolveJiraBoardForRule(rule, jiraBoards);
   if (!board?.projectKey) {
     return {
@@ -1431,6 +1458,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
 
   const targetColumnName = jiraTargetColumnName(rule, jiraBoards);
 
+  // All open cards on the board, then keep only cards in the rule's source Trello list.
   const cards = await fetchTrelloBoardCards(credentials, rule.trello_board_id);
   const inSourceList = cards.filter(
     (card) => String(card.idList) === String(rule.trello_source_column_id)
@@ -1438,6 +1466,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
 
   for (const card of inSourceList) {
     try {
+      // Step 1: skip if this Trello card already has a stored Jira issue key.
       const mapping = await getMappingByTrelloCard(rule.environment_id, card.id);
       if (mapping?.jira_issue_key) {
         details.push({
@@ -1449,6 +1478,7 @@ export async function syncExistingItemsForRule(credentials, rule) {
         continue;
       }
 
+      // Step 2: Jira issue may already exist (search by card) — link only, do not transition/move.
       let issue = await findJiraIssueByTrelloCard(credentials, project.key, card.id);
       if (issue) {
         await upsertItemMapping({
@@ -1467,10 +1497,11 @@ export async function syncExistingItemsForRule(credentials, rule) {
         continue;
       }
 
-      const created = await createJiraIssueFromCard(credentials, project, card);
-      await transitionJiraIssueToStatus(
+      // Step 3: no Jira issue — create from card (incl. board transition), then map.
+      const created = await createJiraIssueFromCard(
         credentials,
-        created.key,
+        project,
+        card,
         rule.jira_target_column_id
       );
       await upsertItemMapping({

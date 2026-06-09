@@ -324,14 +324,29 @@ async function getDefaultIssueType(credentials, projectId) {
   });
 
   const project = data.projects?.[0];
-  const issueType = project?.issuetypes?.[0];
+  const issueTypes = project?.issuetypes ?? [];
+
+  const taskType = issueTypes.find(
+    (type) => String(type.name).toLowerCase() === 'task'
+  );
+  if (taskType) return taskType;
+
+  const nonSubtaskType = issueTypes.find((type) => type.subtask === false);
+  if (nonSubtaskType) return nonSubtaskType;
+
+  const issueType = issueTypes[0];
   if (!issueType) {
     throw new Error(`No issue types found for Jira project ${projectId}`);
   }
   return issueType;
 }
 
-export async function createJiraIssueFromCard(credentials, project, card) {
+export async function createJiraIssueFromCard(
+  credentials,
+  project,
+  card,
+  targetStatusId
+) {
   const client = axios.create(jiraAuthConfig(credentials));
   const issueType = await getDefaultIssueType(credentials, project.id);
   const marker = TRELLO_CARD_MARKER(card.id);
@@ -361,6 +376,10 @@ export async function createJiraIssueFromCard(credentials, project, card) {
       issuetype: { id: issueType.id },
     },
   });
+
+  if (targetStatusId) {
+    await transitionJiraIssueToStatus(credentials, data.key, targetStatusId);
+  }
 
   return data;
 }
